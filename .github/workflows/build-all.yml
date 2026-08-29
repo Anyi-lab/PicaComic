@@ -96,7 +96,11 @@ jobs:
 
       - name: Build ios
         if: matrix.platform == 'ios'
-        run: flutter build ios --release --no-codesign
+        run: |
+          flutter build ios --release --no-codesign
+          mkdir -p build/ios/Payload
+          cp -r build/ios/iphoneos/Runner.app build/ios/Payload/
+          (cd build/ios && zip -r Payload.ipa Payload && rm -rf Payload)
 
       - name: Build linux
         if: matrix.platform == 'linux'
@@ -112,5 +116,6 @@ jobs:
             build/windows/x64/runner/Release/**
             build/macos/Build/Products/Release/*.app/**
             build/ios/iphoneos/Runner.app/**
+            build/ios/Payload.ipa
             build/linux/x64/release/bundle/**
           if-no-files-found: warn
