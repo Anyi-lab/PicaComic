@@ -50,23 +50,16 @@ class ScrollManager {
     }
     moveOffset = null;
     startTime = null;
-    if (logic.fABValue < 58) {
-      logic.fABValue = 0;
-      logic.update(["FAB"]);
-    } else if (logic.fABValue >= 58) {
-      logic.fABValue = 0;
-      logic.jumpToNextChapter();
-    }
+    // 章末蓄力: 松手后若未充满, 由全局 onTapUp 中的 scheduleDecay 在2秒后回落
   }
 
   /// handle pointer move event
   void addOffset(Offset value) {
-    if (logic.scrollController.offset ==
-            logic.scrollController.position.maxScrollExtent &&
-        logic.photoViewController.scale == 1 &&
-        logic.showFloatingButtonValue == 1) {
-      logic.fABValue -= value.dy / 3;
-      logic.update(["FAB"]);
+    // 章末蓄力(连续滚动模式): 已滚到底部且未放大时, 向上拖动推进蓄力进度。
+    // 拖动约174px蓄满(与原 fABValue/58 手感一致), 充满即切下一章。
+    // 注意: photoViewController.scale 初始为 null, 需按 1(未放大)处理。
+    if (logic.isAtChapterEnd && (logic.photoViewController.scale ?? 1) == 1) {
+      logic.chargeForNextChapter(-value.dy / 58);
       return;
     }
     if (logic.photoViewController.scale == 1) {
@@ -217,6 +210,9 @@ class TapController {
       logic.scrollManager!.tapUp(detail);
     }
 
+    // 章末蓄力: 松手后若未充满, 2秒后进度平滑回落
+    logic.chapterEndCharge.scheduleDecay();
+
     if (_tapOffset != null) {
       var distance = (detail.position - _tapOffset!).distanceSquared;
       if (distance > _kMaxTapOffset || distance < -_kMaxTapOffset) {
@@ -261,6 +257,26 @@ class TapController {
     }
     if (appdata.settings[9] == "4" && logic.scrollManager!.fingers != 2) {
       logic.scrollManager!.addOffset(event.delta);
+    }
+    // 章末蓄力(翻页模式): 手指沿翻页方向持续拖动时推进进度
+    if (!logic.isContinuousMode &&
+        TapController.fingers == 1 &&
+        logic.isAtChapterEnd &&
+        !logic.noScroll &&
+        (logic.photoViewControllers[logic.index]?.scale ?? 1) == 1) {
+      bool forward = event.delta.dy < 0 || event.delta.dx < 0;
+      if (appdata.settings[9] == "2" || appdata.settings[9] == "6") {
+        forward = !forward;
+      }
+      if (forward) {
+        // 约600逻辑像素的连续拖动可蓄满
+        if (logic.chargeForNextChapter(-event.delta.distance / 600)) {
+          return;
+        }
+        TapController.lastScrollTime = DateTime.now();
+      } else if (logic.chapterEndCharge.isActive) {
+        logic.chapterEndCharge.reset();
+      }
     }
   }
 

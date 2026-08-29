@@ -193,12 +193,19 @@ extension ImageExt on ComicReadingPage {
             }
             logic.jumpToLastChapter();
           } else if (i == logic.urls.length + 1 + extraPage) {
-            if (!logic.data.hasEp) {
-              logic.jumpByDeviceType(i - 1);
+            // 末尾空白页: 有下一章且开启蓄力时停留等待蓄力, 否则保持原行为
+            if (!logic.shouldChargeBeforeNextChapter) {
+              if (!logic.data.hasEp) {
+                logic.jumpByDeviceType(i - 1);
+                return;
+              }
+              logic.jumpToNextChapter();
               return;
             }
-            logic.jumpToNextChapter();
+            logic.isOnEndBlankPage = true;
+            logic.update();
           } else {
+            logic.isOnEndBlankPage = false;
             logic.index = i;
             logic.isOnChapterCommentsPage = showCommentsAtEnd && i == logic.urls.length + 1;
             logic.update();
@@ -295,11 +302,17 @@ extension ImageExt on ComicReadingPage {
             }
             logic.jumpToLastChapter();
           } else if (i == calcItemCount() - 1) {
-            if (!logic.data.hasEp || logic.order == logic.data.eps?.length) {
-              logic.pageController.jumpByDeviceType(logic.pageController.page!.round() - 1);
+            // 末尾空白页: 有下一章且开启蓄力时停留等待蓄力, 否则保持原行为
+            if (!logic.shouldChargeBeforeNextChapter) {
+              if (!logic.data.hasEp || logic.order == logic.data.eps?.length) {
+                logic.pageController.jumpByDeviceType(logic.pageController.page!.round() - 1);
+                return;
+              }
+              logic.jumpToNextChapter();
               return;
             }
-            logic.jumpToNextChapter();
+            logic.isOnEndBlankPage = true;
+            logic.update();
           } else {
             logic.index = logic.singlePageForFirstScreen
                 ? (i * 2 - 2).clamp(1, logic.urls.length)
@@ -347,15 +360,25 @@ extension ImageExt on ComicReadingPage {
       logic.mouseScroll = pointerSignal.kind == PointerDeviceKind.mouse;
       if (pointerSignal is PointerScrollEvent && !logic.isCtrlPressed) {
         if (logic.readingMethod != ReadingMethod.topToBottomContinuously) {
+          // 章末蓄力: 滚轮在末页继续滚动时推进蓄力而非直接切章
+          if (pointerSignal.scrollDelta.dy > 0 && logic.isAtChapterEnd) {
+            logic.chargeForNextChapter(0.4);
+            return;
+          }
           pointerSignal.scrollDelta.dy > 0
               ? logic.jumpToNextPage()
               : logic.jumpToLastPage();
         } else {
-          if ((logic.scrollController.position.pixels ==
-                      logic.scrollController.position.minScrollExtent &&
+          // 连续滚动模式: 已滚到底部后继续向下滚动 → 蓄力切章
+          if (pointerSignal.scrollDelta.dy > 0 && logic.isAtChapterEnd) {
+            logic.chargeForNextChapter(0.4);
+            return;
+          }
+          if ((logic.scrollController.position.pixels <=
+                      logic.scrollController.position.minScrollExtent + 2 &&
                   pointerSignal.scrollDelta.dy < 0) ||
-              (logic.scrollController.position.pixels ==
-                      logic.scrollController.position.maxScrollExtent &&
+              (logic.scrollController.position.pixels >=
+                      logic.scrollController.position.maxScrollExtent - 2 &&
                   pointerSignal.scrollDelta.dy > 0)) {
             logic.photoViewController.updateMultiple(
                 position: logic.photoViewController.position -
@@ -389,12 +412,12 @@ extension ImageExt on ComicReadingPage {
             if (!logic.scrollController.hasClients) return false;
             if (logic.scrollController.position.pixels -
                         logic.scrollController.position.minScrollExtent <=
-                    0 &&
+                    2 &&
                 logic.order != 0) {
               logic.showFloatingButton(-1);
             } else if (logic.scrollController.position.pixels -
                         logic.scrollController.position.maxScrollExtent >=
-                    0 &&
+                    -2 &&
                 logic.order < length) {
               logic.showFloatingButton(1);
             } else {
