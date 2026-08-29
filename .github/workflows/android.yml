@@ -1,0 +1,87 @@
+name: Build Android APK
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build_apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h / | tail -1
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/local/share/swift
+          sudo rm -rf /usr/local/lib/node_modules
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          sudo rm -rf /usr/local/lib/android/sdk/emulator
+          sudo rm -rf /usr/local/lib/android/sdk/system-images
+          sudo rm -rf /usr/local/lib/android/sdk/extras
+          sudo rm -rf /usr/local/lib/android/sdk/cmdline-tools
+          df -h / | tail -1
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate debug keystore + key.properties
+        run: |
+          keytool -genkeypair -v -keystore /tmp/debug.keystore -alias debug -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          printf 'storePassword=android\nkeyPassword=android\nkeyAlias=debug\nstoreFile=/tmp/debug.keystore\n' > android/key.properties
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build release APK
+        run: |
+          # flutter tool may crash with "Already watching path" after gradle succeeds;
+          # the real artifacts are what matters, so verify the APKs directly.
+          flutter build apk --release --split-per-abi > build.log 2>&1 || true
+          ls -la build/app/outputs/flutter-apk/*.apk
+          tail -5 build.log
+
+      - name: Push APK to artifacts branch
+        if: success()
+        run: |
+          mkdir -p build-output
+          # Flutter 3.47+ with --split-per-abi also emits a fat APK
+          # (app-release.apk, >100MB) which exceeds GitHub's file size limit;
+          # publish only the per-ABI APKs (app-<abi>-release.apk).
+          cp build/app/outputs/flutter-apk/app-*-release.apk build-output/ 2>/dev/null || true
+          ls -la build-output/
+          if ! ls build-output/*.apk >/dev/null 2>&1; then
+            echo "No per-ABI APK produced, aborting push"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f build-output
+          git commit -m "ci: apk $(date -u +%s)" || exit 0
+          git push --force origin HEAD:artifacts
+
+      - name: Push build log to build-logs branch
+        if: failure()
+        run: |
+          # Never force-push the artifacts branch on failure: a previous
+          # failure wiped the published APKs. Logs go to a separate branch.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f build.log
+          git commit -m "ci: build log $(date -u +%s)" || exit 0
+          git push --force origin HEAD:build-logs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-artifacts
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build.log
