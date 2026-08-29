@@ -73,6 +73,8 @@ jobs:
           if [ -n "$F" ]; then
             sed -i \
               -e 's|WIL_VERSION "1.0.231216.1"|WIL_VERSION "1.0.260126.7"|' \
+              -e 's|WEBVIEW_VERSION "1.0.2849.39"|WEBVIEW_VERSION "1.0.4191.47"|' \
+              -e 's|CPP_WINRT_VERSION "2.0.240405.15"|CPP_WINRT_VERSION "3.0.260818.1"|' \
               -e 's|cxx_std_17|cxx_std_20|g' \
               "$F"
           fi
