@@ -1,0 +1,93 @@
+name: Build All Clients
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: android
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+          - os: ubuntu-latest
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space (ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell \
+            /usr/local/share/swift /usr/local/lib/node_modules \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android/sdk/emulator \
+            /usr/local/lib/android/sdk/system-images \
+            /usr/local/lib/android/sdk/extras \
+            /usr/local/lib/android/sdk/cmdline-tools
+          df -h / | tail -1
+
+      - name: Install Linux build deps
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build libgtk-3-dev
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable desktop platforms
+        if: matrix.platform != 'android'
+        run: flutter config --enable-${{ matrix.platform }}-desktop
+
+      - name: Generate debug keystore
+        if: matrix.platform == 'android'
+        run: |
+          keytool -genkeypair -v -keystore /tmp/debug.keystore -alias debug \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          printf 'storePassword=android\nkeyPassword=android\nkeyAlias=debug\nstoreFile=/tmp/debug.keystore\n' > android/key.properties
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build android
+        if: matrix.platform == 'android'
+        run: |
+          flutter build apk --release --split-per-abi > build.log 2>&1 || true
+          ls build/app/outputs/flutter-apk/*.apk
+          tail -5 build.log
+
+      - name: Build windows
+        if: matrix.platform == 'windows'
+        run: flutter build windows --release
+
+      - name: Build macos
+        if: matrix.platform == 'macos'
+        run: flutter build macos --release
+
+      - name: Build linux
+        if: matrix.platform == 'linux'
+        run: flutter build linux --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ matrix.platform }}-build
+          path: |
+            build/app/outputs/flutter-apk/*.apk
+            build/windows/x64/runner/Release/**
+            build/macos/Build/Products/Release/*.app/**
+            build/linux/x64/release/bundle/**
+          if-no-files-found: warn
