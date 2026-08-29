@@ -17,6 +17,8 @@ jobs:
             platform: windows
           - os: macos-latest
             platform: macos
+          - os: macos-latest
+            platform: ios
           - os: ubuntu-latest
             platform: linux
     runs-on: ${{ matrix.os }}
@@ -46,7 +48,7 @@ jobs:
           channel: stable
 
       - name: Enable desktop platforms
-        if: matrix.platform != 'android'
+        if: contains(fromJSON('["windows","macos","linux"]'), matrix.platform)
         run: flutter config --enable-${{ matrix.platform }}-desktop
 
       - name: Generate debug keystore
@@ -90,6 +92,10 @@ jobs:
         if: matrix.platform == 'macos'
         run: flutter build macos --release
 
+      - name: Build ios
+        if: matrix.platform == 'ios'
+        run: flutter build ios --release --no-codesign
+
       - name: Build linux
         if: matrix.platform == 'linux'
         run: flutter build linux --release
@@ -103,5 +109,6 @@ jobs:
             build/app/outputs/flutter-apk/*.apk
             build/windows/x64/runner/Release/**
             build/macos/Build/Products/Release/*.app/**
+            build/ios/iphoneos/Runner.app/**
             build/linux/x64/release/bundle/**
           if-no-files-found: warn
