@@ -84,7 +84,7 @@ jobs:
               -e 's|cxx_std_17|cxx_std_20|g' \
               "$CMAKE_F"
             # Suppress experimental/coroutine deprecation (STL1011)
-            sed -i '/cmake_minimum_required/a add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNING)' "$CMAKE_F"
+            sed -i '/cmake_minimum_required/a add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' "$CMAKE_F"
           fi
 
           # 2) Fix C4596: remove ClassName:: from operator==/!= and specific method decls
