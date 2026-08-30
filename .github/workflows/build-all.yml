@@ -122,10 +122,11 @@ jobs:
 
           echo "Patched C4596 in all affected headers"
 
-          # 3) Fix always_false_v: add missing template definition
+          # 3) Fix always_false_v: add missing template definition before first use
           UTIL_H="$PLUGIN_DIR/windows/utils/util.h"
           if [ -f "$UTIL_H" ]; then
-            printf '%s\n' '' 'template<typename T>' 'constexpr bool always_false_v = false;' >> "$UTIL_H"
+            # Insert template definition at line 1 (before any usage at line 27+)
+            { echo "template<typename T>"; echo "constexpr bool always_false_v = false;"; cat "$UTIL_H"; } > "$UTIL_H.tmp" && mv "$UTIL_H.tmp" "$UTIL_H"
             echo "Patched always_false_v"
           fi
 
