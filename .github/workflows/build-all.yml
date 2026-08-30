@@ -84,11 +84,20 @@ jobs:
               -e 's|cxx_std_17|cxx_std_20|g' \
               "$CMAKE_F"
             # Suppress experimental/coroutine deprecation (STL1011)
-            # Patch ALL MSVC STL coroutine headers (there may be copies in SDK/ and VC/Tools/)
-            for MSVC_CORO_HDR in $(find "/c/Program Files/Microsoft Visual Studio" -name "coroutine" -path "*/include/experimental/coroutine" -type f 2>/dev/null); do
+            # Patch ALL MSVC STL experimental/coroutine headers
+            # Must patch BOTH SDK/ and VC/Tools/ copies
+            find "/c/Program Files/Microsoft Visual Studio" -type f -path "*/experimental/coroutine" 2>/dev/null | while read -r MSVC_CORO_HDR; do
               echo "Patching MSVC header: $MSVC_CORO_HDR"
               sed -i 's/_EMIT_STL_ERROR(STL1011/_EMIT_STL_ERROR(STL1011_/' "$MSVC_CORO_HDR"
               sed -i 's/_EMIT_STL_ERROR(STL1010/_EMIT_STL_ERROR(STL1010_/' "$MSVC_CORO_HDR"
+            done
+            # Fallback: also patch the known MSVC toolset path directly
+            for GLOB_HDR in "/c/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/"*/include/experimental/coroutine; do
+              if [ -f "$GLOB_HDR" ]; then
+                echo "Patching MSVC toolset header (glob): $GLOB_HDR"
+                sed -i 's/_EMIT_STL_ERROR(STL1011/_EMIT_STL_ERROR(STL1011_/' "$GLOB_HDR"
+                sed -i 's/_EMIT_STL_ERROR(STL1010/_EMIT_STL_ERROR(STL1010_/' "$GLOB_HDR"
+              fi
             done
             # Also define the macro as fallback for any include path
             sed -i '/cmake_minimum_required/a add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' "$CMAKE_F"
@@ -137,6 +146,10 @@ jobs:
             # Only match the bare 'return s2;' with semicolon, not 'return s2.compare(...)' or similar
             sed -i '/^\s*return s2;$/d' "$STR_H"
             echo "Patched to_uppercase in string.h"
+
+            # Fix 3c: join() lambda auto& fails MSVC 18 C++20 template deduction
+            sed -i 's/\[delim\](auto& a, auto& b)/[delim](const std::basic_string<T>\& a, const std::basic_string<T>\& b)/g' "$STR_H"
+            echo "Patched join() lambda in string.h"
           fi
 
       - name: Build android
