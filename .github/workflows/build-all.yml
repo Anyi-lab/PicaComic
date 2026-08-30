@@ -100,9 +100,8 @@ jobs:
           TYPES_DIR="$PLUGIN_DIR/windows/types"
 
           # operator== and operator!= qualified names (ClassName::operator== → operator==)
-          for HFILE in "$TYPES_DIR"/permission_response.h "$TYPES_DIR"/server_trust_auth_response.h \
-                        "$TYPES_DIR"/size_2d.h "$TYPES_DIR"/rect.h \
-                        "$TYPES_DIR"/download_start_response.h; do
+          # Patch ALL .h files in types/ to avoid missing files
+          for HFILE in "$TYPES_DIR"/*.h; do
             [ -f "$HFILE" ] && sed -i -E 's/([A-Z][a-zA-Z0-9_]+::(operator[!=]=))/\2/g' "$HFILE"
           done
 
