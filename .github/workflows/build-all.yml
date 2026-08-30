@@ -129,6 +129,28 @@ jobs:
             echo "Patched always_false_v"
           fi
 
+          # 3b) Fix to_uppercase() bug: returns non-existent s2, modifies const ref
+          # The void to_uppercase function is dead code with a bug — comment it out
+          STR_H="$PLUGIN_DIR/windows/utils/string.h"
+          if [ -f "$STR_H" ]; then
+            python3 -c "
+lines = open(r'$STR_H').readlines()
+out = []
+skip = False
+for line in lines:
+    if 'void to_uppercase(const std::basic_string' in line:
+        skip = True
+    if skip:
+        out.append('// ' + line)
+        if line.strip() == '}':
+            skip = False
+    else:
+        out.append(line)
+open(r'$STR_H', 'w').writelines(out)
+print('Patched to_uppercase in string.h')
+"
+          fi
+
       - name: Build android
         if: matrix.platform == 'android'
         run: |
