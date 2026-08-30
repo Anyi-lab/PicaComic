@@ -365,13 +365,23 @@ extension ImageExt on ComicReadingPage {
             logic.chargeForNextChapter(0.4);
             return;
           }
+          // 章首蓄力: 滚轮在首页继续向上滚动时推进蓄力而非直接切上一章
+          if (pointerSignal.scrollDelta.dy < 0 && logic.isAtChapterStart) {
+            logic.chargeForLastChapter(0.4);
+            return;
+          }
           pointerSignal.scrollDelta.dy > 0
               ? logic.jumpToNextPage()
               : logic.jumpToLastPage();
         } else {
-          // 连续滚动模式: 已滚到底部后继续向下滚动 → 蓄力切章
+          // 连续滚动模式: 已滚到底部后继续向下滚动 → 蓄力切下一章
           if (pointerSignal.scrollDelta.dy > 0 && logic.isAtChapterEnd) {
             logic.chargeForNextChapter(0.4);
+            return;
+          }
+          // 连续滚动模式: 已滚到顶部后继续向上滚动 → 蓄力切上一章
+          if (pointerSignal.scrollDelta.dy < 0 && logic.isAtChapterStart) {
+            logic.chargeForLastChapter(0.4);
             return;
           }
           if ((logic.scrollController.position.pixels <=

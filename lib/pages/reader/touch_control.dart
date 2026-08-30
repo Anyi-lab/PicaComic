@@ -55,11 +55,14 @@ class ScrollManager {
 
   /// handle pointer move event
   void addOffset(Offset value) {
-    // 章末蓄力(连续滚动模式): 已滚到底部且未放大时, 向上拖动推进蓄力进度。
-    // 拖动约174px蓄满(与原 fABValue/58 手感一致), 充满即切下一章。
-    // 注意: photoViewController.scale 初始为 null, 需按 1(未放大)处理。
+    // 章末蓄力(连续滚动模式): 已滚到底部且未放大时, 向下拖动推进蓄力进度。
     if (logic.isAtChapterEnd && (logic.photoViewController.scale ?? 1) == 1) {
       logic.chargeForNextChapter(-value.dy / 58);
+      return;
+    }
+    // 章首蓄力(连续滚动模式): 已滚到顶部且未放大时, 向上拖动推进蓄力进度。
+    if (logic.isAtChapterStart && (logic.photoViewController.scale ?? 1) == 1) {
+      logic.chargeForLastChapter(value.dy / 58);
       return;
     }
     if (logic.photoViewController.scale == 1) {
@@ -212,6 +215,7 @@ class TapController {
 
     // 章末蓄力: 松手后若未充满, 2秒后进度平滑回落
     logic.chapterEndCharge.scheduleDecay();
+    logic.chapterStartCharge.scheduleDecay();
 
     if (_tapOffset != null) {
       var distance = (detail.position - _tapOffset!).distanceSquared;
@@ -269,13 +273,31 @@ class TapController {
         forward = !forward;
       }
       if (forward) {
-        // 约600逻辑像素的连续拖动可蓄满
         if (logic.chargeForNextChapter(-event.delta.distance / 600)) {
           return;
         }
         TapController.lastScrollTime = DateTime.now();
       } else if (logic.chapterEndCharge.isActive) {
         logic.chapterEndCharge.reset();
+      }
+    }
+    // 章首蓄力(翻页模式): 手指向上拖动时推进上一章蓄力进度
+    if (!logic.isContinuousMode &&
+        TapController.fingers == 1 &&
+        logic.isAtChapterStart &&
+        !logic.noScroll &&
+        (logic.photoViewControllers[logic.index]?.scale ?? 1) == 1) {
+      bool backward = event.delta.dy > 0 || event.delta.dx > 0;
+      if (appdata.settings[9] == "2" || appdata.settings[9] == "6") {
+        backward = !backward;
+      }
+      if (backward) {
+        if (logic.chargeForLastChapter(event.delta.distance / 600)) {
+          return;
+        }
+        TapController.lastScrollTime = DateTime.now();
+      } else if (logic.chapterStartCharge.isActive) {
+        logic.chapterStartCharge.reset();
       }
     }
   }

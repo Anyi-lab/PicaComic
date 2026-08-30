@@ -262,31 +262,6 @@ class _ReadingSettingsState extends State<ReadingSettings> {
           ),
         // 点按翻页
 
-        SliverToBoxAdapter(
-          child: SwitchListTile(
-            title: Text("连续滚动模式章末蓄力切章".tl),
-            subtitle: Text("仅\"从上至下(连续)\"模式生效: 滚到底部继续滑动蓄力, 充满后才切换章节".tl),
-            value: appdata.settings.length > 105
-                ? appdata.settings[105] == "1"
-                : false,
-            onChanged: (b) {
-              setState(() {
-                while (appdata.settings.length <= 105) {
-                  appdata.settings.add("0");
-                }
-                appdata.settings[105] = b ? "1" : "0";
-              });
-              appdata.updateSettings();
-              try {
-                var logic =
-                    StateController.find<ComicReadingPageLogic>();
-                logic.chapterEndCharge.reset();
-                logic.update();
-              } catch (_) {}
-            },
-          ),
-        ),
-
         if (App.isMobile)
           SliverToBoxAdapter(
             child: SwitchListTile(

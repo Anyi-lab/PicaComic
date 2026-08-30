@@ -63,20 +63,62 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
-      - name: Patch inappwebview SDK for new MSVC (Windows)
+      - name: Patch inappwebview for new MSVC (Windows)
         if: matrix.platform == 'windows'
         shell: bash
         run: |
-          F=$(find "$USERPROFILE/AppData/Local/Pub/Cache" -path '*flutter_inappwebview_windows/windows/CMakeLists.txt' 2>/dev/null | head -1)
-          [ -z "$F" ] && F=$(find . -path '*flutter_inappwebview_windows/windows/CMakeLists.txt' 2>/dev/null | head -1)
-          echo "Patching inappwebview windows CMakeLists: $F"
-          if [ -n "$F" ]; then
+          # Find plugin dir via symlink or pub cache
+          PLUGIN_DIR=$(find windows/flutter/ephemeral/.plugin_symlinks -maxdepth 1 -name 'flutter_inappwebview_windows' 2>/dev/null | head -1)
+          [ -z "$PLUGIN_DIR" ] && PLUGIN_DIR=$(find "$USERPROFILE/AppData/Local/Pub/Cache" -path '*flutter_inappwebview_windows' -maxdepth 3 -type d 2>/dev/null | head -1)
+          echo "Plugin dir: $PLUGIN_DIR"
+          [ -z "$PLUGIN_DIR" ] && { echo "ERROR: Plugin dir not found!"; exit 1; }
+
+          # 1) Upgrade CMake SDK versions + cxx_std_17→cxx_std_20
+          CMAKE_F="$PLUGIN_DIR/windows/CMakeLists.txt"
+          if [ -f "$CMAKE_F" ]; then
+            echo "Patching CMakeLists.txt"
             sed -i \
               -e 's|WIL_VERSION "1.0.231216.1"|WIL_VERSION "1.0.260126.7"|' \
               -e 's|WEBVIEW_VERSION "1.0.2849.39"|WEBVIEW_VERSION "1.0.4191.47"|' \
               -e 's|CPP_WINRT_VERSION "2.0.240405.15"|CPP_WINRT_VERSION "3.0.260818.1"|' \
               -e 's|cxx_std_17|cxx_std_20|g' \
-              "$F"
+              "$CMAKE_F"
+            # Suppress experimental/coroutine deprecation (STL1011)
+            sed -i '/cmake_minimum_required/a add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_)' "$CMAKE_F"
+          fi
+
+          # 2) Fix C4596: remove ClassName:: from operator==/!= and specific method decls
+          # Be precise — do NOT touch enum value accesses like EnumType::value
+          TYPES_DIR="$PLUGIN_DIR/windows/types"
+
+          # operator== and operator!= qualified names (ClassName::operator== → operator==)
+          for HFILE in "$TYPES_DIR"/permission_response.h "$TYPES_DIR"/server_trust_auth_response.h \
+                        "$TYPES_DIR"/size_2d.h "$TYPES_DIR"/rect.h \
+                        "$TYPES_DIR"/download_start_response.h; do
+            [ -f "$HFILE" ] && sed -i -E 's/([A-Z][a-zA-Z0-9_]+::(operator[!=]=))/\2/g' "$HFILE"
+          done
+
+          # web_resource_response.h: WebResourceResponse::toWebView2Response
+          [ -f "$TYPES_DIR/web_resource_response.h" ] && \
+            sed -i 's/WebResourceResponse::toWebView2Response/toWebView2Response/g' "$TYPES_DIR/web_resource_response.h"
+
+          # platform_util.h: PlatformUtil::HandleWindowProc, PlatformUtil::_EmitEvent
+          PU_H="$PLUGIN_DIR/windows/platform_util.h"
+          [ -f "$PU_H" ] && \
+            sed -i -E 's/PlatformUtil::(HandleWindowProc|_EmitEvent)/\1/g' "$PU_H"
+
+          # flutter_inappwebview_windows_plugin.h: FlutterInappwebviewWindowsPlugin::HandleWindowProc
+          PL_H="$PLUGIN_DIR/windows/flutter_inappwebview_windows_plugin.h"
+          [ -f "$PL_H" ] && \
+            sed -i 's/FlutterInappwebviewWindowsPlugin::HandleWindowProc/HandleWindowProc/g' "$PL_H"
+
+          echo "Patched C4596 in all affected headers"
+
+          # 3) Fix always_false_v: add missing template definition
+          UTIL_H="$PLUGIN_DIR/windows/utils/util.h"
+          if [ -f "$UTIL_H" ]; then
+            printf '%s\n' '' 'template<typename T>' 'constexpr bool always_false_v = false;' >> "$UTIL_H"
+            echo "Patched always_false_v"
           fi
 
       - name: Build android

@@ -318,6 +318,11 @@ class ComicReadingPage extends StatelessWidget {
         logic.fABValue = v * 58;
         logic.update(["FAB"]);
       };
+      logic.chapterStartCharge.onChanged = (v) {
+        // 章首蓄力进度: 同样更新FAB显示(上一章按钮同理)
+        logic.fABValue = v * 58;
+        logic.update(["FAB"]);
+      };
       logic.continuationIndexCallback ??= (_) {
         unawaited(syncReaderContinuationState(readingData, logic));
       };

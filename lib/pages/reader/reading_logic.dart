@@ -153,14 +153,23 @@ class ComicReadingPageLogic extends StateController {
   bool get isContinuousMode =>
       readingMethod == ReadingMethod.topToBottomContinuously;
 
-  /// 是否启用"章末蓄力切下一章"(设置项105), 且当前确实存在下一章。
-  /// 仅"从上至下(连续)"模式生效; 其余翻页模式保持原版行为(到章末直接切章)。
+  /// 连续滚动模式下是否需要蓄力才能切到下一章(存在下一章时默认启用)。
   bool get shouldChargeBeforeNextChapter =>
       isContinuousMode &&
-      appdata.settings.length > 105 &&
-      appdata.settings[105] == "1" &&
       data.hasEp &&
       order < (data.eps?.length ?? 1);
+
+  /// 连续滚动模式下是否需要蓄力才能切到上一章(存在上一章时默认启用)。
+  bool get shouldChargeBeforeLastChapter =>
+      isContinuousMode &&
+      data.hasEp &&
+      order > 1;
+
+  /// 连续滚动模式下是否已滚动到本章开头(带2px容差)
+  bool get isAtScrollStart =>
+      scrollController.hasClients &&
+      scrollController.position.pixels <=
+          scrollController.position.minScrollExtent + 2.0;
 
   /// 连续滚动模式下是否已滚动到本章末尾(带2px容差, 避免浮点严格相等)
   bool get isAtScrollEnd =>
@@ -168,8 +177,11 @@ class ComicReadingPageLogic extends StateController {
       scrollController.position.pixels >=
           scrollController.position.maxScrollExtent - 2.0;
 
-  /// 章末蓄力状态机
+  /// 章末蓄力状态机(切下一章)
   final chapterEndCharge = ChapterEndCharge();
+
+  /// 章首蓄力状态机(切上一章)
+  final chapterStartCharge = ChapterEndCharge();
 
   /// 双页模式下是否在第一页时显示单页
   bool get singlePageForFirstScreen => appdata.implicitData[1] == '1';
@@ -325,6 +337,7 @@ class ComicReadingPageLogic extends StateController {
     isOnChapterCommentsPage = false;
     isOnEndBlankPage = false;
     chapterEndCharge.reset();
+    chapterStartCharge.reset();
     pageController = _createPageController(1);
     isLoading = true;
     requestedLoadingItems = [];
@@ -346,9 +359,13 @@ class ComicReadingPageLogic extends StateController {
       shouldChargeBeforeNextChapter &&
       (isContinuousMode ? isAtScrollEnd : (isOnEndBlankPage || index >= urls.length));
 
+  /// 当前是否处于章节开头(连续滚动模式下已滚动到顶部)。
+  bool get isAtChapterStart =>
+      shouldChargeBeforeLastChapter &&
+      isContinuousMode &&
+      isAtScrollStart;
+
   /// 章末蓄力: 推进进度, 充满后切换到下一章。
-  /// [pageFraction] 为本次操作相当于整页的比例(如滚轮一格约0.4页)。
-  /// 返回 true 表示本次调用触发了切章。
   bool chargeForNextChapter(double pageFraction) {
     if (!isAtChapterEnd) {
       return false;
@@ -356,6 +373,19 @@ class ComicReadingPageLogic extends StateController {
     final full = chapterEndCharge.advance(_chargeIncrementFor(pageFraction));
     if (full) {
       jumpToNextChapter();
+      return true;
+    }
+    return false;
+  }
+
+  /// 章首蓄力: 推进进度, 充满后切换到上一章。
+  bool chargeForLastChapter(double pageFraction) {
+    if (!isAtChapterStart) {
+      return false;
+    }
+    final full = chapterStartCharge.advance(_chargeIncrementFor(pageFraction));
+    if (full) {
+      jumpToLastChapter();
       return true;
     }
     return false;
@@ -377,6 +407,11 @@ class ComicReadingPageLogic extends StateController {
   }
 
   void jumpToLastPage() {
+    // 章首蓄力: 连续滚动模式下第一页继续往上翻时先蓄力
+    if (isAtChapterStart) {
+      chargeForLastChapter(1);
+      return;
+    }
     if (readingMethod.index < 3) {
       pageController.jumpToPage(index - 1);
     } else if (readingMethod == ReadingMethod.topToBottomContinuously) {
@@ -460,6 +495,7 @@ class ComicReadingPageLogic extends StateController {
 
   void jumpToLastChapter() {
     showFloatingButtonValue = 0;
+    chapterStartCharge.reset();
     if (order == 1 || !data.hasEp) {
       if (readingMethod != ReadingMethod.topToBottomContinuously) {
         jumpByDeviceType(1);
@@ -518,6 +554,7 @@ class ComicReadingPageLogic extends StateController {
     showFloatingButtonValue = 0;
     isOnEndBlankPage = false;
     chapterEndCharge.reset();
+    chapterStartCharge.reset();
     index = 1;
     urls.clear();
     isLoading = true;
