@@ -84,6 +84,14 @@ jobs:
               -e 's|cxx_std_17|cxx_std_20|g' \
               "$CMAKE_F"
             # Suppress experimental/coroutine deprecation (STL1011)
+            # Patch the MSVC STL header directly to neuter the static_assert
+            MSVC_CORO_HDR=$(find "/c/Program Files/Microsoft Visual Studio" -path "*/include/experimental/coroutine" -type f 2>/dev/null | head -1)
+            if [ -n "$MSVC_CORO_HDR" ]; then
+              echo "Patching MSVC header: $MSVC_CORO_HDR"
+              sed -i 's/_EMIT_STL_ERROR(STL1011/_EMIT_STL_ERROR(STL1011_/' "$MSVC_CORO_HDR"
+              sed -i 's/_EMIT_STL_ERROR(STL1010/_EMIT_STL_ERROR(STL1010_/' "$MSVC_CORO_HDR"
+            fi
+            # Also define the macro as fallback for any include path
             sed -i '/cmake_minimum_required/a add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' "$CMAKE_F"
           fi
 
