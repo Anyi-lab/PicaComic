@@ -84,23 +84,23 @@ jobs:
               -e 's|cxx_std_17|cxx_std_20|g' \
               "$CMAKE_F"
             # Suppress experimental/coroutine deprecation (STL1011)
-            # Patch ALL MSVC STL experimental/coroutine headers
-            # Must patch BOTH SDK/ and VC/Tools/ copies
+            # The _EMIT_STL_ERROR macro expands to static_assert(false, ...) so renaming
+            # the argument doesn't help — the static_assert always fires.
+            # Instead, insert #define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
+            # at the top of each coroutine header BEFORE the #elif check in the file.
             find "/c/Program Files/Microsoft Visual Studio" -type f -path "*/experimental/coroutine" 2>/dev/null | while read -r MSVC_CORO_HDR; do
-              echo "Patching MSVC header: $MSVC_CORO_HDR"
-              sed -i 's/_EMIT_STL_ERROR(STL1011/_EMIT_STL_ERROR(STL1011_/' "$MSVC_CORO_HDR"
-              sed -i 's/_EMIT_STL_ERROR(STL1010/_EMIT_STL_ERROR(STL1010_/' "$MSVC_CORO_HDR"
+              echo "Patching MSVC header (STL1011 suppression): $MSVC_CORO_HDR"
+              sed -i '1a #define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS' "$MSVC_CORO_HDR"
             done
             # Fallback: also patch the known MSVC toolset path directly
             for GLOB_HDR in "/c/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/"*/include/experimental/coroutine; do
               if [ -f "$GLOB_HDR" ]; then
-                echo "Patching MSVC toolset header (glob): $GLOB_HDR"
-                sed -i 's/_EMIT_STL_ERROR(STL1011/_EMIT_STL_ERROR(STL1011_/' "$GLOB_HDR"
-                sed -i 's/_EMIT_STL_ERROR(STL1010/_EMIT_STL_ERROR(STL1010_/' "$GLOB_HDR"
+                echo "Patching MSVC toolset header (glob, STL1011): $GLOB_HDR"
+                sed -i '1a #define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS' "$GLOB_HDR"
               fi
             done
-            # Also define the macro as fallback for any include path
-            sed -i '/cmake_minimum_required/a add_definitions(-D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' "$CMAKE_F"
+            # Also define via CMake for any include path we might have missed
+            sed -i '/cmake_minimum_required/a add_definitions(-D_ALLOW_DEPRECATED_EXPERIMENTAL_DEFINITIONS -D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' "$CMAKE_F"
           fi
 
           # 2) Fix C4596: remove ClassName:: from operator==/!= and specific method decls
