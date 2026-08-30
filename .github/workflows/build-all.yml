@@ -133,20 +133,9 @@ jobs:
           # The void to_uppercase function is dead code with a bug — comment it out
           STR_H="$PLUGIN_DIR/windows/utils/string.h"
           if [ -f "$STR_H" ]; then
-            python3 -c "import sys
-lines = open(sys.argv[1]).readlines()
-out, skip = [], False
-for line in lines:
-    if 'void to_uppercase(const std::basic_string' in line:
-        skip = True
-    if skip:
-        out.append('// ' + line)
-        if line.strip() == '}':
-            skip = False
-    else:
-        out.append(line)
-open(sys.argv[1], 'w').writelines(out)
-print('Patched to_uppercase in string.h')" "$STR_H"
+            # Use sed to comment out from 'void to_uppercase(const' through next '}'
+            sed -i '/void to_uppercase(const std::basic_string/,/^  }/s/^/\/\//' "$STR_H"
+            echo "Patched to_uppercase in string.h"
           fi
 
       - name: Build android
