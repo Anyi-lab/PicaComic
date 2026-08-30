@@ -129,12 +129,14 @@ jobs:
             echo "Patched always_false_v"
           fi
 
-          # 3b) Fix to_uppercase() bug: returns non-existent s2, modifies const ref
-          # The void to_uppercase function is dead code with a bug — comment it out
+          # 3b) Fix to_uppercase() bugs: const ref prevents modification, stray return s2
           STR_H="$PLUGIN_DIR/windows/utils/string.h"
           if [ -f "$STR_H" ]; then
-            # Use sed to comment out from 'void to_uppercase(const' through next '}'
-            sed -i '/void to_uppercase(const std::basic_string/,/^  }/s/^/\/\//' "$STR_H"
+            # Fix 1: Remove const from to_uppercase parameter (allow in-place modification)
+            sed -i '/void to_uppercase/{s/const std::basic_string<T>& s/std::basic_string<T>\& s/;}' "$STR_H"
+            # Fix 2: Remove the stray 'return s2;' line (void function, s2 doesn't exist in scope)
+            # Only match the bare 'return s2;' with semicolon, not 'return s2.compare(...)' or similar
+            sed -i '/^\s*return s2;$/d' "$STR_H"
             echo "Patched to_uppercase in string.h"
           fi
 
