@@ -133,10 +133,9 @@ jobs:
           # The void to_uppercase function is dead code with a bug — comment it out
           STR_H="$PLUGIN_DIR/windows/utils/string.h"
           if [ -f "$STR_H" ]; then
-            python3 -c "
-lines = open(r'$STR_H').readlines()
-out = []
-skip = False
+            python3 -c "import sys
+lines = open(sys.argv[1]).readlines()
+out, skip = [], False
 for line in lines:
     if 'void to_uppercase(const std::basic_string' in line:
         skip = True
@@ -146,9 +145,8 @@ for line in lines:
             skip = False
     else:
         out.append(line)
-open(r'$STR_H', 'w').writelines(out)
-print('Patched to_uppercase in string.h')
-"
+open(sys.argv[1], 'w').writelines(out)
+print('Patched to_uppercase in string.h')" "$STR_H"
           fi
 
       - name: Build android
