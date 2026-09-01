@@ -1,7 +1,5 @@
 library pica_reader;
 
-import 'package:liquid_glass_widgets/widgets/shared/adaptive_liquid_glass_layer.dart';
-import 'package:pica_comic/utils/show_delayed_dialog.dart';
 import 'dart:async';
 import 'dart:io';
 import 'package:battery_plus/battery_plus.dart';
@@ -44,7 +42,6 @@ import 'package:pica_comic/utils/time.dart';
 import 'package:pica_comic/network/jm_network/jm_network.dart';
 import '../../foundation/app.dart';
 import '../../foundation/platform_utils.dart';
-import '../../foundation/ui_mode.dart';
 import '../../network/hitomi_network/hitomi_models.dart';
 import '../../utils/extensions.dart';
 import '../../utils/key_down_event.dart';
@@ -55,7 +52,6 @@ import '../../utils/ohos_device_info.dart';
 import 'package:pica_comic/network/picacg_network/methods.dart' as picacg;
 import 'package:pica_comic/utils/translations.dart';
 
-import '../jm/jm_comments_page.dart';
 import 'package:pica_comic/network/cloudflare.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
@@ -317,6 +313,16 @@ class ComicReadingPage extends StatelessWidget {
       BaseImageProvider.clearCache();
       BaseImageProvider.setCacheSizeLimit(100 * 1024 * 1024);
       logic.openEpsView = openEpsDrawer;
+      logic.chapterEndCharge.onChanged = (v) {
+        // 蓄力进度显示在悬浮按钮(下一章)上: 按钮高度58, 从底部向上填充
+        logic.fABValue = v * 58;
+        logic.update(["FAB"]);
+      };
+      logic.chapterStartCharge.onChanged = (v) {
+        // 章首蓄力进度: 同样更新FAB显示(上一章按钮同理)
+        logic.fABValue = v * 58;
+        logic.update(["FAB"]);
+      };
       logic.continuationIndexCallback ??= (_) {
         unawaited(syncReaderContinuationState(readingData, logic));
       };
@@ -432,7 +438,7 @@ class ComicReadingPage extends StatelessWidget {
                       right: 0,
                       child: IgnorePointer(
                         child: ColoredBox(
-                          color: Colors.black.withOpacity(0.2),
+                          color: Colors.black.withValues(alpha: 0.2),
                         ),
                       ),
                     ),
@@ -766,6 +772,7 @@ class ComicReadingPage extends StatelessWidget {
     saveImage(file);
   }
 
+  /// 蓄力进度已改为显示在悬浮按钮(下一章)上, 由 fABValue(0~58) 控制填充高度。
   Widget? buildEpChangeButton(ComicReadingPageLogic logic) {
     if (!readingData.hasEp) return null;
     switch (logic.showFloatingButtonValue) {
@@ -817,8 +824,8 @@ class ComicReadingPage extends StatelessWidget {
                         child: ColoredBox(
                           color: Theme.of(App.globalContext!)
                               .colorScheme
-                              .surfaceTint
-                              .withOpacity(0.2),
+                              .primary
+                              .withValues(alpha: 0.45),
                           child: const SizedBox.expand(),
                         ),
                       )
