@@ -1,0 +1,433 @@
+name: Build and Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version, e.g. 4.8.9 or v4.8.9'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes in Markdown'
+        required: false
+        default: 'Automated build.'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare Release Metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      suffix: ${{ steps.version.outputs.suffix }}
+    steps:
+      - name: Normalize and validate version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          version="${INPUT_VERSION#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Version must use MAJOR.MINOR.PATCH, e.g. 4.8.9"
+            exit 1
+          fi
+          tag="v${version}"
+          suffix="${version//./}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::Release $tag already exists."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "suffix=$suffix"   >> "$GITHUB_OUTPUT"
+          echo "Building release $tag (suffix $suffix)"
+
+  android:
+    name: Android Build
+    needs: prepare
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell \
+            /usr/local/share/swift /usr/local/lib/node_modules \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android/sdk/emulator \
+            /usr/local/lib/android/sdk/system-images
+          df -h / | tail -1
+
+      - name: Set application version
+        run: |
+          set -euo pipefail
+          V='${{ needs.prepare.outputs.version }}'
+          BUILD=$(echo "$V" | awk -F. '{printf "%d%02d%02d00", $1, $2, $3}')
+          sed -i -E "s/^version: .*/version: ${V}+${BUILD}/" pubspec.yaml
+          sed -i -E "s/^const appVersion = \".*\";/const appVersion = \"${V}\";/" lib/foundation/def.dart
+          grep -E '^version:' pubspec.yaml
+          grep -n 'appVersion' lib/foundation/def.dart | head -1
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+
+      - name: Prepare Android signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            echo "Using release keystore from secrets."
+            printf "%s" "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-key.jks
+            cat > android/key.properties <<EOF
+          storeFile=app/release-key.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+            chmod 600 android/app/release-key.jks android/key.properties
+          else
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 secret; generating a throwaway debug keystore."
+            keytool -genkeypair -v -keystore /tmp/debug.keystore -alias debug \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+            printf 'storePassword=android\nkeyPassword=android\nkeyAlias=debug\nstoreFile=/tmp/debug.keystore\n' > android/key.properties
+          fi
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build APKs
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          SUF='${{ needs.prepare.outputs.suffix }}'
+          # android/app/build.gradle already declares an abi split with
+          # include 'arm64-v8a', 'x86_64' and universalApk true, so a single
+          # assembleRelease emits the universal APK plus one per included ABI.
+          # Do NOT pass --split-per-abi: flutter would then expect an
+          # armeabi-v7a APK that this project intentionally does not build.
+          flutter build apk --release
+          ls -lh build/app/outputs/flutter-apk/
+          mv build/app/outputs/flutter-apk/app-release.apk "dist/PicaComic-android-universal_${SUF}.apk"
+          mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/PicaComic-android-arm64-v8a_${SUF}.apk"
+          mv build/app/outputs/flutter-apk/app-x86_64-release.apk "dist/PicaComic-android-x86_64_${SUF}.apk"
+          ls -lh dist/
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-android
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows Build
+    needs: prepare
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set application version
+        shell: bash
+        run: |
+          set -euo pipefail
+          V='${{ needs.prepare.outputs.version }}'
+          BUILD=$(echo "$V" | awk -F. '{printf "%d%02d%02d00", $1, $2, $3}')
+          sed -i -E "s/^version: .*/version: ${V}+${BUILD}/" pubspec.yaml
+          sed -i -E "s/^const appVersion = \".*\";/const appVersion = \"${V}\";/" lib/foundation/def.dart
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable windows desktop
+        run: flutter config --enable-windows-desktop
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Patch inappwebview for new MSVC
+        shell: bash
+        run: |
+          PLUGIN_DIR=$(find windows/flutter/ephemeral/.plugin_symlinks -maxdepth 1 -name 'flutter_inappwebview_windows' 2>/dev/null | head -1)
+          [ -z "$PLUGIN_DIR" ] && PLUGIN_DIR=$(find "$USERPROFILE/AppData/Local/Pub/Cache" -path '*flutter_inappwebview_windows' -maxdepth 3 -type d 2>/dev/null | head -1)
+          echo "Plugin dir: $PLUGIN_DIR"
+          [ -z "$PLUGIN_DIR" ] && { echo "ERROR: Plugin dir not found!"; exit 1; }
+
+          # 1) Upgrade CMake SDK versions + cxx_std_17 -> cxx_std_20
+          CMAKE_F="$PLUGIN_DIR/windows/CMakeLists.txt"
+          if [ -f "$CMAKE_F" ]; then
+            sed -i \
+              -e 's|WIL_VERSION "1.0.231216.1"|WIL_VERSION "1.0.260126.7"|' \
+              -e 's|WEBVIEW_VERSION "1.0.2849.39"|WEBVIEW_VERSION "1.0.4191.47"|' \
+              -e 's|CPP_WINRT_VERSION "2.0.240405.15"|CPP_WINRT_VERSION "3.0.260818.1"|' \
+              -e 's|cxx_std_17|cxx_std_20|g' \
+              "$CMAKE_F"
+            # _EMIT_STL_ERROR expands to static_assert(false,...) so the guard macro
+            # must be defined inside the header itself, before the #elif check.
+            find "/c/Program Files/Microsoft Visual Studio" -type f -path "*/experimental/coroutine" 2>/dev/null | while read -r H; do
+              echo "Patching MSVC header (STL1011): $H"
+              sed -i '1a #define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS' "$H"
+            done
+            sed -i '/cmake_minimum_required/a add_definitions(-D_ALLOW_DEPRECATED_EXPERIMENTAL_DEFINITIONS -D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' "$CMAKE_F"
+          fi
+
+          # 2) C4596: strip redundant qualified names in member declarations
+          TYPES_DIR="$PLUGIN_DIR/windows/types"
+          for HFILE in "$TYPES_DIR"/*.h; do
+            [ -f "$HFILE" ] && sed -i -E 's/([A-Z][a-zA-Z0-9_]+::(operator[!=]=))/\2/g' "$HFILE"
+          done
+          [ -f "$TYPES_DIR/web_resource_response.h" ] && \
+            sed -i 's/WebResourceResponse::toWebView2Response/toWebView2Response/g' "$TYPES_DIR/web_resource_response.h"
+          PU_H="$PLUGIN_DIR/windows/platform_util.h"
+          [ -f "$PU_H" ] && sed -i -E 's/PlatformUtil::(HandleWindowProc|_EmitEvent)/\1/g' "$PU_H"
+          PL_H="$PLUGIN_DIR/windows/flutter_inappwebview_windows_plugin.h"
+          [ -f "$PL_H" ] && sed -i 's/FlutterInappwebviewWindowsPlugin::HandleWindowProc/HandleWindowProc/g' "$PL_H"
+
+          # 3) always_false_v missing template definition
+          UTIL_H="$PLUGIN_DIR/windows/utils/util.h"
+          if [ -f "$UTIL_H" ]; then
+            { echo "template<typename T>"; echo "constexpr bool always_false_v = false;"; cat "$UTIL_H"; } > "$UTIL_H.tmp" && mv "$UTIL_H.tmp" "$UTIL_H"
+          fi
+
+          # 4) string.h: to_uppercase const ref + stray return + join() lambda deduction
+          STR_H="$PLUGIN_DIR/windows/utils/string.h"
+          if [ -f "$STR_H" ]; then
+            sed -i '/void to_uppercase/{s/const std::basic_string<T>& s/std::basic_string<T>\& s/;}' "$STR_H"
+            sed -i '/^\s*return s2;$/d' "$STR_H"
+            sed -i 's/\[delim\](auto& a, auto& b)/[delim](const std::basic_string<T>\& a, const std::basic_string<T>\& b)/g' "$STR_H"
+          fi
+
+      - name: Build Windows release
+        run: flutter build windows --release
+
+      - name: Create portable zip
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path 'build/windows/x64/runner/Release/*' `
+            -DestinationPath "dist/PicaComic-windows-x64_${{ needs.prepare.outputs.suffix }}.zip"
+          Get-ChildItem dist
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-windows
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS Build
+    needs: prepare
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set application version
+        run: |
+          set -euo pipefail
+          V='${{ needs.prepare.outputs.version }}'
+          BUILD=$(echo "$V" | awk -F. '{printf "%d%02d%02d00", $1, $2, $3}')
+          sed -i '' -E "s/^version: .*/version: ${V}+${BUILD}/" pubspec.yaml
+          sed -i '' -E "s/^const appVersion = \".*\";/const appVersion = \"${V}\";/" lib/foundation/def.dart
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable macos desktop
+        run: flutter config --enable-macos-desktop
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build macOS release
+        run: flutter build macos --release
+
+      - name: Create DMG
+        run: |
+          set -euo pipefail
+          rm -rf build/dmg dist && mkdir -p build/dmg dist
+          APP=$(find build/macos/Build/Products/Release -maxdepth 1 -name '*.app' | head -1)
+          echo "App bundle: $APP"
+          cp -R "$APP" build/dmg/
+          hdiutil create -volname "PicaComic" -srcfolder build/dmg -ov -format UDZO \
+            "dist/PicaComic-macos_${{ needs.prepare.outputs.suffix }}.dmg"
+          ls -lh dist/
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-macos
+          path: dist/*
+          if-no-files-found: error
+
+  ios:
+    name: iOS Build (Unsigned)
+    needs: prepare
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set application version
+        run: |
+          set -euo pipefail
+          V='${{ needs.prepare.outputs.version }}'
+          BUILD=$(echo "$V" | awk -F. '{printf "%d%02d%02d00", $1, $2, $3}')
+          sed -i '' -E "s/^version: .*/version: ${V}+${BUILD}/" pubspec.yaml
+          sed -i '' -E "s/^const appVersion = \".*\";/const appVersion = \"${V}\";/" lib/foundation/def.dart
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        run: flutter build ios --release --no-codesign
+
+      - name: Package IPA
+        run: |
+          set -euo pipefail
+          rm -rf build/Payload dist && mkdir -p build/Payload dist
+          cp -R build/ios/iphoneos/Runner.app build/Payload/
+          (cd build && zip -qr "$GITHUB_WORKSPACE/dist/PicaComic-ios-unsigned_${{ needs.prepare.outputs.suffix }}.ipa" Payload)
+          ls -lh dist/
+
+      - name: Upload iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-ios
+          path: dist/*
+          if-no-files-found: error
+
+  linux:
+    name: Linux x64 Build
+    needs: prepare
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set application version
+        run: |
+          set -euo pipefail
+          V='${{ needs.prepare.outputs.version }}'
+          BUILD=$(echo "$V" | awk -F. '{printf "%d%02d%02d00", $1, $2, $3}')
+          sed -i -E "s/^version: .*/version: ${V}+${BUILD}/" pubspec.yaml
+          sed -i -E "s/^const appVersion = \".*\";/const appVersion = \"${V}\";/" lib/foundation/def.dart
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build libgtk-3-dev \
+            libwebkit2gtk-4.1-dev libsoup-3.0-dev pkg-config
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Enable linux desktop
+        run: flutter config --enable-linux-desktop
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build Linux release
+        run: flutter build linux --release
+
+      - name: Create tarball
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -czf "dist/PicaComic-linux-x64_${{ needs.prepare.outputs.suffix }}.tar.gz" \
+            -C build/linux/x64/release/bundle .
+          ls -lh dist/
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-linux
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: [prepare, android, windows, macos, ios, linux]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-assets-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          SUF='${{ needs.prepare.outputs.suffix }}'
+
+          expected=(
+            "PicaComic-android-arm64-v8a_${SUF}.apk"
+            "PicaComic-android-x86_64_${SUF}.apk"
+            "PicaComic-android-universal_${SUF}.apk"
+            "PicaComic-ios-unsigned_${SUF}.ipa"
+            "PicaComic-linux-x64_${SUF}.tar.gz"
+            "PicaComic-macos_${SUF}.dmg"
+            "PicaComic-windows-x64_${SUF}.zip"
+          )
+
+          ls -lh release-assets/
+          for asset in "${expected[@]}"; do
+            if [ ! -s "release-assets/$asset" ]; then
+              echo "::error::Missing or empty release asset: $asset"
+              exit 1
+            fi
+          done
+
+          # Create as draft first so a partial upload never appears as a real release.
+          release_json="$(gh api --method POST "repos/${GH_REPO}/releases" \
+            -f "tag_name=${TAG}" \
+            -f "target_commitish=${GITHUB_SHA}" \
+            -f "name=${TAG}" \
+            -f "body=${RELEASE_NOTES}" \
+            -F 'draft=true' \
+            -F 'prerelease=false')"
+          release_id="$(jq -r '.id' <<< "$release_json")"
+
+          for asset in "${expected[@]}"; do
+            echo "Uploading $asset"
+            gh release upload "$TAG" "release-assets/$asset" --clobber
+          done
+
+          gh api --method PATCH "repos/${GH_REPO}/releases/${release_id}" \
+            -F 'draft=false' -f 'make_latest=true' >/dev/null
+          echo "Published $TAG"
