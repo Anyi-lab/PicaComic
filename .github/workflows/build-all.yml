@@ -196,7 +196,7 @@ jobs:
           for dir in */; do
             platform="${dir%/}"
             echo "Zipping $platform..."
-            (cd "$dir" && zip -r "../${platform}.zip" .)
+            (cd "$dir" && zip -r "../../${platform}.zip" .)
           done
           ls -lh ../*.zip
 
