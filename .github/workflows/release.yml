@@ -120,11 +120,16 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           SUF='${{ needs.prepare.outputs.suffix }}'
+          # android/app/build.gradle already declares an abi split with
+          # include 'arm64-v8a', 'x86_64' and universalApk true, so a single
+          # assembleRelease emits the universal APK plus one per included ABI.
+          # Do NOT pass --split-per-abi: flutter would then expect an
+          # armeabi-v7a APK that this project intentionally does not build.
           flutter build apk --release
+          ls -lh build/app/outputs/flutter-apk/
           mv build/app/outputs/flutter-apk/app-release.apk "dist/PicaComic-android-universal_${SUF}.apk"
-          flutter build apk --release --split-per-abi
           mv build/app/outputs/flutter-apk/app-arm64-v8a-release.apk "dist/PicaComic-android-arm64-v8a_${SUF}.apk"
-          mv build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk "dist/PicaComic-android-armeabi-v7a_${SUF}.apk"
+          mv build/app/outputs/flutter-apk/app-x86_64-release.apk "dist/PicaComic-android-x86_64_${SUF}.apk"
           ls -lh dist/
 
       - name: Upload Android artifacts
@@ -392,7 +397,7 @@ jobs:
 
           expected=(
             "PicaComic-android-arm64-v8a_${SUF}.apk"
-            "PicaComic-android-armeabi-v7a_${SUF}.apk"
+            "PicaComic-android-x86_64_${SUF}.apk"
             "PicaComic-android-universal_${SUF}.apk"
             "PicaComic-ios-unsigned_${SUF}.ipa"
             "PicaComic-linux-x64_${SUF}.tar.gz"
