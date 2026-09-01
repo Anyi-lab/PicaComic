@@ -67,13 +67,11 @@ jobs:
         if: matrix.platform == 'windows'
         shell: bash
         run: |
-          # Find plugin dir via symlink or pub cache
           PLUGIN_DIR=$(find windows/flutter/ephemeral/.plugin_symlinks -maxdepth 1 -name 'flutter_inappwebview_windows' 2>/dev/null | head -1)
           [ -z "$PLUGIN_DIR" ] && PLUGIN_DIR=$(find "$USERPROFILE/AppData/Local/Pub/Cache" -path '*flutter_inappwebview_windows' -maxdepth 3 -type d 2>/dev/null | head -1)
           echo "Plugin dir: $PLUGIN_DIR"
           [ -z "$PLUGIN_DIR" ] && { echo "ERROR: Plugin dir not found!"; exit 1; }
 
-          # 1) Upgrade CMake SDK versions + cxx_std_17→cxx_std_20
           CMAKE_F="$PLUGIN_DIR/windows/CMakeLists.txt"
           if [ -f "$CMAKE_F" ]; then
             echo "Patching CMakeLists.txt"
@@ -83,71 +81,43 @@ jobs:
               -e 's|CPP_WINRT_VERSION "2.0.240405.15"|CPP_WINRT_VERSION "3.0.260818.1"|' \
               -e 's|cxx_std_17|cxx_std_20|g' \
               "$CMAKE_F"
-            # Suppress experimental/coroutine deprecation (STL1011)
-            # The _EMIT_STL_ERROR macro expands to static_assert(false, ...) so renaming
-            # the argument doesn't help — the static_assert always fires.
-            # Instead, insert #define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS
-            # at the top of each coroutine header BEFORE the #elif check in the file.
             find "/c/Program Files/Microsoft Visual Studio" -type f -path "*/experimental/coroutine" 2>/dev/null | while read -r MSVC_CORO_HDR; do
               echo "Patching MSVC header (STL1011 suppression): $MSVC_CORO_HDR"
               sed -i '1a #define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS' "$MSVC_CORO_HDR"
             done
-            # Fallback: also patch the known MSVC toolset path directly
             for GLOB_HDR in "/c/Program Files/Microsoft Visual Studio/18/Enterprise/VC/Tools/MSVC/"*/include/experimental/coroutine; do
               if [ -f "$GLOB_HDR" ]; then
                 echo "Patching MSVC toolset header (glob, STL1011): $GLOB_HDR"
                 sed -i '1a #define _SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS' "$GLOB_HDR"
               fi
             done
-            # Also define via CMake for any include path we might have missed
             sed -i '/cmake_minimum_required/a add_definitions(-D_ALLOW_DEPRECATED_EXPERIMENTAL_DEFINITIONS -D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS)' "$CMAKE_F"
           fi
 
-          # 2) Fix C4596: remove ClassName:: from operator==/!= and specific method decls
-          # Be precise — do NOT touch enum value accesses like EnumType::value
           TYPES_DIR="$PLUGIN_DIR/windows/types"
-
-          # operator== and operator!= qualified names (ClassName::operator== → operator==)
-          # Patch ALL .h files in types/ to avoid missing files
           for HFILE in "$TYPES_DIR"/*.h; do
             [ -f "$HFILE" ] && sed -i -E 's/([A-Z][a-zA-Z0-9_]+::(operator[!=]=))/\2/g' "$HFILE"
           done
-
-          # web_resource_response.h: WebResourceResponse::toWebView2Response
           [ -f "$TYPES_DIR/web_resource_response.h" ] && \
             sed -i 's/WebResourceResponse::toWebView2Response/toWebView2Response/g' "$TYPES_DIR/web_resource_response.h"
-
-          # platform_util.h: PlatformUtil::HandleWindowProc, PlatformUtil::_EmitEvent
           PU_H="$PLUGIN_DIR/windows/platform_util.h"
           [ -f "$PU_H" ] && \
             sed -i -E 's/PlatformUtil::(HandleWindowProc|_EmitEvent)/\1/g' "$PU_H"
-
-          # flutter_inappwebview_windows_plugin.h: FlutterInappwebviewWindowsPlugin::HandleWindowProc
           PL_H="$PLUGIN_DIR/windows/flutter_inappwebview_windows_plugin.h"
           [ -f "$PL_H" ] && \
             sed -i 's/FlutterInappwebviewWindowsPlugin::HandleWindowProc/HandleWindowProc/g' "$PL_H"
-
           echo "Patched C4596 in all affected headers"
 
-          # 3) Fix always_false_v: add missing template definition before first use
           UTIL_H="$PLUGIN_DIR/windows/utils/util.h"
           if [ -f "$UTIL_H" ]; then
-            # Insert template definition at line 1 (before any usage at line 27+)
             { echo "template<typename T>"; echo "constexpr bool always_false_v = false;"; cat "$UTIL_H"; } > "$UTIL_H.tmp" && mv "$UTIL_H.tmp" "$UTIL_H"
             echo "Patched always_false_v"
           fi
-
-          # 3b) Fix to_uppercase() bugs: const ref prevents modification, stray return s2
           STR_H="$PLUGIN_DIR/windows/utils/string.h"
           if [ -f "$STR_H" ]; then
-            # Fix 1: Remove const from to_uppercase parameter (allow in-place modification)
             sed -i '/void to_uppercase/{s/const std::basic_string<T>& s/std::basic_string<T>\& s/;}' "$STR_H"
-            # Fix 2: Remove the stray 'return s2;' line (void function, s2 doesn't exist in scope)
-            # Only match the bare 'return s2;' with semicolon, not 'return s2.compare(...)' or similar
             sed -i '/^\s*return s2;$/d' "$STR_H"
             echo "Patched to_uppercase in string.h"
-
-            # Fix 3c: join() lambda auto& fails MSVC 18 C++20 template deduction
             sed -i 's/\[delim\](auto& a, auto& b)/[delim](const std::basic_string<T>\& a, const std::basic_string<T>\& b)/g' "$STR_H"
             echo "Patched join() lambda in string.h"
           fi
@@ -192,3 +162,50 @@ jobs:
             build/ios/Payload.ipa
             build/linux/x64/release/bundle/**
           if-no-files-found: warn
+
+  release:
+    needs: build
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate version tag
+        id: version
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          DATE=$(date -u +"%Y%m%d")
+          TAG="v${DATE}.${SHORT_SHA}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Generated tag: $TAG"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: false
+
+      - name: List artifacts
+        run: find artifacts -type f | head -50
+
+      - name: Zip each platform artifact
+        run: |
+          cd artifacts
+          for dir in */; do
+            platform="${dir%/}"
+            echo "Zipping $platform..."
+            (cd "$dir" && zip -r "../${platform}.zip" .)
+          done
+          ls -lh ../*.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "${{ steps.version.outputs.tag }} — Auto Release"
+          generate_release_notes: true
+          files: artifacts/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
