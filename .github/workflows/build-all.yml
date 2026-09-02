@@ -145,7 +145,14 @@ jobs:
       - name: Build android
         if: matrix.platform == 'android'
         run: |
-          flutter build apk --release --split-per-abi
+          # android/app/build.gradle declares an abi split with
+          # include 'arm64-v8a', 'x86_64' and universalApk true, so a single
+          # assembleRelease already emits the universal APK plus one per
+          # included ABI. Do NOT pass --split-per-abi: flutter would then
+          # expect an armeabi-v7a APK that this project intentionally does
+          # not build, and abort with a misleading
+          # "Gradle build failed to produce an .apk file".
+          flutter build apk --release
           ls -lh build/app/outputs/flutter-apk/*.apk
 
       - name: Build windows
