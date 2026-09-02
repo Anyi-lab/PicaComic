@@ -51,14 +51,34 @@ jobs:
         if: contains(fromJSON('["windows","macos","linux"]'), matrix.platform)
         run: flutter config --enable-${{ matrix.platform }}-desktop
 
-      - name: Generate debug keystore
+      - name: Prepare Android signing
         if: matrix.platform == 'android'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          keytool -genkeypair -v -keystore /tmp/debug.keystore -alias debug \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
-          printf 'storePassword=android\nkeyPassword=android\nkeyAlias=debug\nstoreFile=/tmp/debug.keystore\n' > android/key.properties
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > /tmp/release.keystore
+            if ! keytool -list -keystore /tmp/release.keystore \
+                 -storepass "$ANDROID_KEYSTORE_PASSWORD" >/dev/null 2>&1; then
+              echo "::error::release keystore failed to load - check ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD"
+              exit 1
+            fi
+            printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=/tmp/release.keystore\n' \
+              "$ANDROID_KEYSTORE_PASSWORD" "$ANDROID_KEY_PASSWORD" "$ANDROID_KEY_ALIAS" \
+              > android/key.properties
+            chmod 600 /tmp/release.keystore android/key.properties
+            echo "signing with release keystore from Secrets"
+          else
+            keytool -genkeypair -v -keystore /tmp/debug.keystore -alias debug \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -storepass android -keypass android \
+              -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+            printf 'storePassword=android\nkeyPassword=android\nkeyAlias=debug\nstoreFile=/tmp/debug.keystore\n' > android/key.properties
+            echo "::warning::ANDROID_KEYSTORE_BASE64 not set - falling back to a throwaway debug keystore"
+          fi
 
       - name: Pub get
         run: flutter pub get
@@ -125,9 +145,8 @@ jobs:
       - name: Build android
         if: matrix.platform == 'android'
         run: |
-          flutter build apk --release --split-per-abi > build.log 2>&1 || true
-          ls build/app/outputs/flutter-apk/*.apk
-          tail -5 build.log
+          flutter build apk --release --split-per-abi
+          ls -lh build/app/outputs/flutter-apk/*.apk
 
       - name: Build windows
         if: matrix.platform == 'windows'
