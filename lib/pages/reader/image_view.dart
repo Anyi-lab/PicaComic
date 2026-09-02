@@ -193,19 +193,12 @@ extension ImageExt on ComicReadingPage {
             }
             logic.jumpToLastChapter();
           } else if (i == logic.urls.length + 1 + extraPage) {
-            // 末尾空白页: 有下一章且开启蓄力时停留等待蓄力, 否则保持原行为
-            if (!logic.shouldChargeBeforeNextChapter) {
-              if (!logic.data.hasEp) {
-                logic.jumpByDeviceType(i - 1);
-                return;
-              }
-              logic.jumpToNextChapter();
+            if (!logic.data.hasEp) {
+              logic.jumpByDeviceType(i - 1);
               return;
             }
-            logic.isOnEndBlankPage = true;
-            logic.update();
+            logic.jumpToNextChapter();
           } else {
-            logic.isOnEndBlankPage = false;
             logic.index = i;
             logic.isOnChapterCommentsPage = showCommentsAtEnd && i == logic.urls.length + 1;
             logic.update();
@@ -302,17 +295,11 @@ extension ImageExt on ComicReadingPage {
             }
             logic.jumpToLastChapter();
           } else if (i == calcItemCount() - 1) {
-            // 末尾空白页: 有下一章且开启蓄力时停留等待蓄力, 否则保持原行为
-            if (!logic.shouldChargeBeforeNextChapter) {
-              if (!logic.data.hasEp || logic.order == logic.data.eps?.length) {
-                logic.pageController.jumpByDeviceType(logic.pageController.page!.round() - 1);
-                return;
-              }
-              logic.jumpToNextChapter();
+            if (!logic.data.hasEp || logic.order == logic.data.eps?.length) {
+              logic.pageController.jumpByDeviceType(logic.pageController.page!.round() - 1);
               return;
             }
-            logic.isOnEndBlankPage = true;
-            logic.update();
+            logic.jumpToNextChapter();
           } else {
             logic.index = logic.singlePageForFirstScreen
                 ? (i * 2 - 2).clamp(1, logic.urls.length)
@@ -360,28 +347,17 @@ extension ImageExt on ComicReadingPage {
       logic.mouseScroll = pointerSignal.kind == PointerDeviceKind.mouse;
       if (pointerSignal is PointerScrollEvent && !logic.isCtrlPressed) {
         if (logic.readingMethod != ReadingMethod.topToBottomContinuously) {
-          // 章末蓄力: 滚轮在末页继续滚动时推进蓄力而非直接切章
-          if (pointerSignal.scrollDelta.dy > 0 && logic.isAtChapterEnd) {
-            logic.chargeForNextChapter(0.4);
-            return;
-          }
-          // 章首蓄力: 滚轮在首页继续向上滚动时推进蓄力而非直接切上一章
-          if (pointerSignal.scrollDelta.dy < 0 && logic.isAtChapterStart) {
-            logic.chargeForLastChapter(0.4);
-            return;
-          }
           pointerSignal.scrollDelta.dy > 0
               ? logic.jumpToNextPage()
               : logic.jumpToLastPage();
         } else {
-          // 连续滚动模式: 已滚到底部后继续向下滚动 → 蓄力切下一章
+          // 滚到章末/章首后继续朝同方向滚动 -> 蓄力切章
           if (pointerSignal.scrollDelta.dy > 0 && logic.isAtChapterEnd) {
-            logic.chargeForNextChapter(0.4);
+            logic.chargeForNextChapter(_kWheelChargeStep);
             return;
           }
-          // 连续滚动模式: 已滚到顶部后继续向上滚动 → 蓄力切上一章
           if (pointerSignal.scrollDelta.dy < 0 && logic.isAtChapterStart) {
-            logic.chargeForLastChapter(0.4);
+            logic.chargeForLastChapter(_kWheelChargeStep);
             return;
           }
           if ((logic.scrollController.position.pixels <=
@@ -420,18 +396,20 @@ extension ImageExt on ComicReadingPage {
             // update floating button
             var length = logic.data.eps?.length ?? 1;
             if (!logic.scrollController.hasClients) return false;
-            if (logic.scrollController.position.pixels -
-                        logic.scrollController.position.minScrollExtent <=
-                    2 &&
-                logic.order != 0) {
+            if (logic.isAtScrollStart && logic.order != 0) {
               logic.showFloatingButton(-1);
-            } else if (logic.scrollController.position.pixels -
-                        logic.scrollController.position.maxScrollExtent >=
-                    -2 &&
-                logic.order < length) {
+            } else if (logic.isAtScrollEnd && logic.order < length) {
               logic.showFloatingButton(1);
             } else {
               logic.showFloatingButton(0);
+            }
+
+            // 滚离章节边界时清除蓄力进度
+            if (logic.chapterEndCharge.isActive && !logic.isAtChapterEnd) {
+              logic.chapterEndCharge.reset();
+            }
+            if (logic.chapterStartCharge.isActive && !logic.isAtChapterStart) {
+              logic.chapterStartCharge.reset();
             }
 
             return true;

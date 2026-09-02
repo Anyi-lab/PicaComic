@@ -50,22 +50,21 @@ class ScrollManager {
     }
     moveOffset = null;
     startTime = null;
-    // 章末蓄力: 松手后若未充满, 由全局 onTapUp 中的 scheduleDecay 在2秒后回落
+    // 松手时若蓄力未充满, 延时后自动回落
+    logic.chapterEndCharge.scheduleDecay();
+    logic.chapterStartCharge.scheduleDecay();
   }
 
   /// handle pointer move event
   void addOffset(Offset value) {
-    // 章末蓄力(连续滚动模式): 已滚到底部且未放大时, 向下拖动推进蓄力进度。
-    if (logic.isAtChapterEnd && (logic.photoViewController.scale ?? 1) == 1) {
-      logic.chargeForNextChapter(-value.dy / 58);
-      return;
-    }
-    // 章首蓄力(连续滚动模式): 已滚到顶部且未放大时, 向上拖动推进蓄力进度。
-    if (logic.isAtChapterStart && (logic.photoViewController.scale ?? 1) == 1) {
-      logic.chargeForLastChapter(value.dy / 58);
-      return;
-    }
     if (logic.photoViewController.scale == 1) {
+      // 未放大时列表自身负责滚动, 这里只处理章节边界的蓄力。
+      // 按拖动方向分发, 保证「本章高度不足一屏」时上下两个方向都能蓄力。
+      if (value.dy < 0 && logic.isAtChapterEnd) {
+        logic.chargeForNextChapter(-value.dy);
+      } else if (value.dy > 0 && logic.isAtChapterStart) {
+        logic.chargeForLastChapter(value.dy);
+      }
       return;
     }
     if (moveOffset != null) {
@@ -213,10 +212,6 @@ class TapController {
       logic.scrollManager!.tapUp(detail);
     }
 
-    // 章末蓄力: 松手后若未充满, 2秒后进度平滑回落
-    logic.chapterEndCharge.scheduleDecay();
-    logic.chapterStartCharge.scheduleDecay();
-
     if (_tapOffset != null) {
       var distance = (detail.position - _tapOffset!).distanceSquared;
       if (distance > _kMaxTapOffset || distance < -_kMaxTapOffset) {
@@ -261,44 +256,6 @@ class TapController {
     }
     if (appdata.settings[9] == "4" && logic.scrollManager!.fingers != 2) {
       logic.scrollManager!.addOffset(event.delta);
-    }
-    // 章末蓄力(翻页模式): 手指沿翻页方向持续拖动时推进进度
-    if (!logic.isContinuousMode &&
-        TapController.fingers == 1 &&
-        logic.isAtChapterEnd &&
-        !logic.noScroll &&
-        (logic.photoViewControllers[logic.index]?.scale ?? 1) == 1) {
-      bool forward = event.delta.dy < 0 || event.delta.dx < 0;
-      if (appdata.settings[9] == "2" || appdata.settings[9] == "6") {
-        forward = !forward;
-      }
-      if (forward) {
-        if (logic.chargeForNextChapter(-event.delta.distance / 600)) {
-          return;
-        }
-        TapController.lastScrollTime = DateTime.now();
-      } else if (logic.chapterEndCharge.isActive) {
-        logic.chapterEndCharge.reset();
-      }
-    }
-    // 章首蓄力(翻页模式): 手指向上拖动时推进上一章蓄力进度
-    if (!logic.isContinuousMode &&
-        TapController.fingers == 1 &&
-        logic.isAtChapterStart &&
-        !logic.noScroll &&
-        (logic.photoViewControllers[logic.index]?.scale ?? 1) == 1) {
-      bool backward = event.delta.dy > 0 || event.delta.dx > 0;
-      if (appdata.settings[9] == "2" || appdata.settings[9] == "6") {
-        backward = !backward;
-      }
-      if (backward) {
-        if (logic.chargeForLastChapter(event.delta.distance / 600)) {
-          return;
-        }
-        TapController.lastScrollTime = DateTime.now();
-      } else if (logic.chapterStartCharge.isActive) {
-        logic.chapterStartCharge.reset();
-      }
     }
   }
 
