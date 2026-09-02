@@ -44,7 +44,7 @@ jobs:
         if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libgtk-3-dev libwebkit2gtk-4.1-dev
+          sudo apt-get install -y ninja-build libgtk-3-dev webkit2gtk-4.1
 
       - name: Run subosito/flutter-action@v2
         uses: subosito/flutter-action@v2
