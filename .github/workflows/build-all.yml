@@ -51,14 +51,29 @@ jobs:
         if: contains(fromJSON('["windows","macos","linux"]'), matrix.platform)
         run: flutter config --enable-${{ matrix.platform }}-desktop
 
-      - name: Generate debug keystore
+      - name: Prepare Android Signing
         if: matrix.platform == 'android'
+        id: android_signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          keytool -genkeypair -v -keystore /tmp/debug.keystore -alias debug \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass android -keypass android \
-            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
-          printf 'storePassword=android\nkeyPassword=android\nkeyAlias=debug\nstoreFile=/tmp/debug.keystore\n' > android/key.properties
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "ANDROID_KEYSTORE_BASE64 secret missing; skipping signing setup."
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf "%s" "$ANDROID_KEYSTORE_BASE64" | base64 --decode > android/app/release-key.jks
+          cat <<EOF > android/key.properties
+          storeFile=app/release-key.jks
+          storePassword=$ANDROID_KEYSTORE_PASSWORD
+          keyAlias=$ANDROID_KEY_ALIAS
+          keyPassword=$ANDROID_KEY_PASSWORD
+          EOF
+          chmod 600 android/app/release-key.jks android/key.properties
+          echo "configured=true" >> "$GITHUB_OUTPUT"
 
       - name: Pub get
         run: flutter pub get
