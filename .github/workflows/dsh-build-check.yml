@@ -1,0 +1,146 @@
+name: Build Check
+
+# 构建校验：确认 App 在当前 Flutter 上能真的编出来。
+#
+#   dart-compile —— pub get + build bundle（纯 Dart 编译）+ analyze 统计
+#   android      —— debug / release 两档真打 APK（Gradle / Kotlin / AAPT 全走一遍）
+#
+# 环境上被 Flutter 3.47.9 逼出来的三处调整都在别的提交里：
+#   - JDK 17（Flutter 默认 Java 25，仓库 Gradle 8.14.3 读不了 class file 69）
+#   - Kotlin 2.2.20（3.47.9 的下限）
+#   - androidx.glance:glance-appwidget（HistoryWidget.kt 一直在用，但没声明）
+#   - Gradle 堆 4G + 关 jetifier（JetifyTransform 会 Java heap space）
+on:
+  push:
+    branches:
+      - 'feat/webdav-pr125-fixed'
+      - 'ci/**'
+  workflow_dispatch: {}
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dart-compile:
+    name: dart compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Flutter version
+        run: |
+          flutter --version | tee ver.txt
+          echo "::notice::FLUTTER=$(head -1 ver.txt)"
+
+      - name: flutter pub get
+        id: pubget
+        continue-on-error: true
+        run: flutter pub get > pub.log 2>&1
+
+      - name: flutter build bundle
+        id: bundle
+        if: steps.pubget.outcome == 'success'
+        continue-on-error: true
+        run: flutter build bundle > bundle.log 2>&1
+
+      - name: flutter analyze
+        id: analyze
+        if: steps.pubget.outcome == 'success'
+        continue-on-error: true
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings > analyze.log 2>&1
+
+      - name: report
+        if: always()
+        run: |
+          emit() { tail -n 25 "$1" 2>/dev/null | while IFS= read -r l; do echo "::error::$2: $l"; done; }
+          [ "${{ steps.pubget.outcome }}" = "success" ] || emit pub.log "pub-get"
+          [ "${{ steps.bundle.outcome }}" = "success" ] || [ "${{ steps.bundle.outcome }}" = "skipped" ] || emit bundle.log "bundle"
+          if [ -f analyze.log ]; then
+            # grep -c 无匹配时退出码是 1，bash -e 下会让整个 step 直接失败
+            n=$(grep -cE "error •" analyze.log || true)
+            w=$(grep -cE "warning •" analyze.log || true)
+            echo "::notice::analyze: errors=$n warnings=$w"
+            grep -E "error •" analyze.log | head -n 40 | while IFS= read -r l; do echo "::error::analyze: $l"; done
+          fi
+          # 硬门槛只有两条：依赖装不上、Dart 编不过。
+          # 历史遗留的 warning 只统计，不让它掩盖真正的编译结果。
+          if [ "${{ steps.pubget.outcome }}" != "success" ] || [ "${{ steps.bundle.outcome }}" = "failure" ]; then
+            exit 1
+          fi
+
+  android:
+    name: android apk (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Flutter 3.47.9 默认 Java 25，仓库 Gradle 8.14.3 不认识 class file 69
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell \
+            /usr/local/share/swift /usr/local/lib/node_modules \
+            /opt/hostedtoolcache/CodeQL \
+            /usr/local/lib/android/sdk/emulator \
+            /usr/local/lib/android/sdk/system-images \
+            /usr/local/lib/android/sdk/extras \
+            /usr/local/lib/android/sdk/cmdline-tools
+          df -h / | tail -1
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Generate debug keystore
+        run: |
+          keytool -genkeypair -v -keystore /tmp/debug.keystore -alias debug \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass android -keypass android \
+            -dname "CN=Android Debug,O=Android,C=US" >/dev/null 2>&1
+          printf 'storePassword=android\nkeyPassword=android\nkeyAlias=debug\nstoreFile=/tmp/debug.keystore\n' > android/key.properties
+
+      - name: flutter pub get
+        id: pubget
+        continue-on-error: true
+        run: flutter pub get > pub.log 2>&1
+
+      - name: flutter build apk --${{ matrix.mode }}
+        id: apk
+        if: steps.pubget.outcome == 'success'
+        continue-on-error: true
+        run: flutter build apk --${{ matrix.mode }} > build.log 2>&1
+
+      - name: diagnostics
+        if: always()
+        run: |
+          echo "::notice::mode=${{ matrix.mode }} pubget=${{ steps.pubget.outcome }} apk=${{ steps.apk.outcome }}"
+          if [ -f pub.log ] && [ "${{ steps.pubget.outcome }}" != "success" ]; then
+            tail -n 20 pub.log | while IFS= read -r l; do echo "::error::pub-get: $l"; done
+          fi
+          if [ -f build.log ] && [ "${{ steps.apk.outcome }}" != "success" ]; then
+            sed -n '/What went wrong/,+12p' build.log | while IFS= read -r l; do echo "::error::gradle: $l"; done
+            grep -nE "^e: |error: |ERROR:|FAILURE" build.log | head -n 25 | while IFS= read -r l; do echo "::error::code: $l"; done
+            tail -n 15 build.log | while IFS= read -r l; do echo "::error::tail: $l"; done
+          fi
+          ls -l build/app/outputs/flutter-apk/ 2>&1 | while IFS= read -r l; do echo "::notice::apkdir: $l"; done
+          if [ "${{ steps.apk.outcome }}" != "success" ]; then exit 1; fi
+
+      - uses: actions/upload-artifact@v4
+        if: steps.apk.outcome == 'success'
+        with:
+          name: app-${{ matrix.mode }}-apk
+          path: build/app/outputs/flutter-apk/*.apk
+          if-no-files-found: error
