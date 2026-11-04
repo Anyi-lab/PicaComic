@@ -107,4 +107,7 @@ flutter {
 dependencies {
     coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
     implementation 'com.google.android.gms:play-services-base:18.3.0'
+    // HistoryWidget.kt / MainActivity.kt 里用的是 androidx.glance.appwidget.*，
+    // 但依赖从来没声明过；资源链接阶段就会缺 layout/glance_default_loading_layout。
+    implementation 'androidx.glance:glance-appwidget:1.1.1'
 }
