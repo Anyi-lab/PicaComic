@@ -1,12 +1,3 @@
-import 'package:flutter/cupertino.dart';
-import 'package:flutter/material.dart';
-import 'package:pica_comic/foundation/app.dart';
-import 'package:pica_comic/utils/translations.dart';
-
-import '../../components/components.dart';
-import '../../foundation/js_engine.dart';
-import '../logs_page.dart';
-
 part of 'settings_page.dart';
 
 
