@@ -56,7 +56,9 @@ android {
     }
 
     defaultConfig {
-        applicationId "com.github.pacalini.pica_comic"
+        // .fix 后缀 = 和之前共存版保持同一个 applicationId，
+        // 这样新包能直接覆盖安装那个 App，而不是变成第三个应用。
+        applicationId "com.github.pacalini.pica_comic.fix"
         // You can update the following values to match your application needs.
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
         minSdkVersion flutter.minSdkVersion

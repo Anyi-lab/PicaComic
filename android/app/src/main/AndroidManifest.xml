@@ -19,7 +19,7 @@
     </queries>
 
    <application
-        android:label="Pica Comic"
+        android:label="Pica Comic Fix"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true"
